@@ -31,6 +31,7 @@ from livekit.agents.voice.avatar import AudioSegmentEnd, VideoGenerator
 
 from ._pcm_windowing import bytes_per_window, make_audio_frame, pad_to_window, rms_amplitude
 from .assets import AvatarAssets, MouthState
+from .blink import BlinkDriver
 
 logger = logging.getLogger("visage")
 
@@ -44,6 +45,7 @@ class ImageAvatarVideoGenerator(VideoGenerator):
         audio_sample_rate: int = 24000,
         audio_channels: int = 1,
         open_threshold: float = 500.0,
+        enable_blink: bool = True,
     ) -> None:
         """
         Args:
@@ -58,12 +60,16 @@ class ImageAvatarVideoGenerator(VideoGenerator):
             open_threshold: RMS amplitude (on int16 PCM, 0-32768 range) above
                 which the mouth is considered "open". Tune per-voice — TTS
                 loudness varies a lot by provider/voice.
+            enable_blink: periodically blink if `assets` has `face_blink.png`
+                loaded (no-op otherwise). Note blinking only happens while
+                audio is actively flowing — see README "Known limitations".
         """
         self._assets = assets
         self._video_fps = video_fps
         self._audio_sample_rate = audio_sample_rate
         self._audio_channels = audio_channels
         self._open_threshold = open_threshold
+        self._blink = BlinkDriver() if enable_blink else None
 
         self._bytes_per_window = bytes_per_window(audio_sample_rate, video_fps, audio_channels)
 
@@ -112,8 +118,9 @@ class ImageAvatarVideoGenerator(VideoGenerator):
 
     async def _emit_window(self, pcm_bytes: bytes, num_channels: int) -> None:
         state = MouthState.OPEN if rms_amplitude(pcm_bytes) > self._open_threshold else MouthState.CLOSED
+        blinking = self._blink.advance(1.0 / self._video_fps) if self._blink is not None else False
 
-        video_frame = self._assets.video_frame(state)
+        video_frame = self._assets.video_frame(state, blinking=blinking)
         audio_frame = make_audio_frame(
             pcm_bytes, sample_rate=self._audio_sample_rate, num_channels=num_channels
         )

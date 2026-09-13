@@ -12,12 +12,14 @@ flat 2D art you can swap for your own.
 
 ## Status
 
-**v1 (amplitude-only lip-sync) — working**, and **Phase 2 (real viseme
-timing via Rhubarb Lip Sync) — working, opt-in.** `ImageAvatarVideoGenerator`
-(amplitude, minimal latency) is still the default; `RhubarbVisemeVideoGenerator`
-(real per-phoneme mouth shapes, added latency) is a drop-in alternative —
-see [Real viseme timing](#real-viseme-timing-rhubarb-lip-sync) below. Built
-and verified against `livekit-agents==1.8.1`.
+**v1 (amplitude-only lip-sync) — working**, **Phase 2a (real viseme timing
+via Rhubarb Lip Sync) — working, opt-in**, and **Phase 2b (blinking) —
+working.** `ImageAvatarVideoGenerator` (amplitude, minimal latency) is
+still the default; `RhubarbVisemeVideoGenerator` (real per-phoneme mouth
+shapes, added latency) is a drop-in alternative — see
+[Real viseme timing](#real-viseme-timing-rhubarb-lip-sync) below. Both
+generators blink periodically if `face_blink.png` is present (see
+[Blinking](#blinking)). Built and verified against `livekit-agents==1.8.1`.
 
 ## Quickstart
 
@@ -89,6 +91,31 @@ won't produce meaningful visemes):
 python scripts/smoke_test_rhubarb.py path/to/short_speech_clip.wav
 ```
 
+## Blinking
+
+Both generators periodically blink — a small `BlinkDriver` ([`blink.py`](src/visage/blink.py))
+picks randomized intervals (default 2.5–6s between blinks, ~150ms closed)
+and swaps in `face_blink.png` for the duration. It's automatic and needs no
+wiring: `AvatarAssets.load(...)` picks up `face_blink.png` if it's present
+in your asset folder, and both generators use it unless you pass
+`enable_blink=False`.
+
+**No blink art, no blinking** — if `face_blink.png` is missing, `blinking=True`
+is silently ignored rather than raising, so existing custom asset folders
+keep working unchanged.
+
+**Known limitation: blinking (and all animation) only happens while audio
+is actively flowing.** Both generators only produce video frames from
+pushed audio windows — there's no continuous idle frame-publishing loop, so
+the avatar freezes on its last frame between agent turns rather than
+blinking while silently waiting. Fixing that needs a separate
+heartbeat/idle frame source feeding `AvatarRunner` even with no speech
+happening, which is a real architecture addition, not a tuning knob —
+deferred (see Roadmap). Idle head-sway (subtle bobbing/movement) was also
+considered for this phase and deferred for the same reason plus the extra
+transform/canvas-padding work it needs — call it a documented "won't do
+yet" rather than a partial attempt.
+
 ## How it works
 
 ```
@@ -120,6 +147,7 @@ python scripts/smoke_test_rhubarb.py path/to/short_speech_clip.wav
 
 Drop a folder anywhere with:
 - `face.png` — RGBA, defines the canvas size
+- `face_blink.png` — OPTIONAL, same size, eyes closed — enables blinking
 - `mouth_closed.png`, `mouth_open.png` — RGBA overlays for
   `ImageAvatarVideoGenerator` (amplitude mode)
 - `mouth_x.png` .. `mouth_f.png` — RGBA overlays for
@@ -148,16 +176,21 @@ illustration tool (Figma, Canva, Aseprite) works — no 3D, no rigging.
 - **G/H extended viseme shapes have no dedicated art** — they map to the
   nearest basic shape we do have art for (G→F, H→C) rather than being drawn
   distinctly.
+- **Blinking (and all animation) stops between agent turns** — see
+  [Blinking](#blinking); there's no idle head-sway either (deferred, not
+  attempted).
 
 ## Roadmap
 
 - [x] Phase 0/1 — pipeline proof + amplitude-only MVP
 - [x] Phase 2a — real viseme timing via Rhubarb Lip Sync (opt-in `RhubarbVisemeVideoGenerator`)
-- [ ] Phase 2b — blink/idle-sway polish
+- [x] Phase 2b — blinking
 - [ ] Phase 3 — swappable art-set packaging, published as a pip package
 - [ ] Phase 4 — demo video, community distribution
 - [ ] fast-follow — dedicated G/H viseme art; verify a safe `AgentSession`
-      hook to auto-wire known TTS transcript text into rhubarb's `-d` flag
+      hook to auto-wire known TTS transcript text into rhubarb's `-d` flag;
+      continuous idle animation (blink/sway between turns) via a heartbeat
+      frame source
 
 ## License
 

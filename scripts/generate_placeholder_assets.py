@@ -6,7 +6,8 @@ Flat, emoji-style shapes drawn with Pillow — no artist needed. Run:
 
 Writes into assets/default/:
   - face.png, mouth_closed.png, mouth_open.png       (v1, MouthState)
-  - mouth_x.png .. mouth_f.png                        (Phase 2, Viseme)
+  - mouth_x.png .. mouth_f.png                        (Phase 2a, Viseme)
+  - face_blink.png                                    (Phase 2b, blinking)
 
 Swap these for real art later; anything with the same canvas size and the
 same file names works as a drop-in replacement (see README "Custom art").
@@ -30,7 +31,7 @@ MOUTH_COLOR = (120, 40, 40, 255)
 TEETH_COLOR = (255, 255, 255, 255)
 
 
-def make_face() -> Image.Image:
+def make_face(*, blink: bool = False) -> Image.Image:
     img = Image.new("RGBA", SIZE, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
@@ -38,9 +39,13 @@ def make_face() -> Image.Image:
     draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=FACE_COLOR, outline=OUTLINE, width=6)
 
     eye_r = 18
+    ey = cy - 40
     for ex in (cx - 75, cx + 75):
-        ey = cy - 40
-        draw.ellipse((ex - eye_r, ey - eye_r, ex + eye_r, ey + eye_r), fill=EYE_COLOR)
+        if blink:
+            # closed eye: a thin horizontal line instead of a filled circle
+            draw.line((ex - eye_r, ey, ex + eye_r, ey), fill=EYE_COLOR, width=6)
+        else:
+            draw.ellipse((ex - eye_r, ey - eye_r, ex + eye_r, ey + eye_r), fill=EYE_COLOR)
 
     return img
 
@@ -101,6 +106,7 @@ def make_mouth_viseme(shape: Viseme) -> Image.Image:
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     make_face().save(OUT_DIR / "face.png")
+    make_face(blink=True).save(OUT_DIR / "face_blink.png")
     make_mouth_closed().save(OUT_DIR / "mouth_closed.png")
     make_mouth_open().save(OUT_DIR / "mouth_open.png")
     for viseme in Viseme:

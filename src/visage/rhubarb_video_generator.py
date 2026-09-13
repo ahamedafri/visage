@@ -31,6 +31,7 @@ from livekit.agents.voice.avatar import AudioSegmentEnd, VideoGenerator
 
 from ._pcm_windowing import bytes_per_window, make_audio_frame, pad_to_window, rms_amplitude
 from .assets import AvatarAssets, MouthState, Viseme
+from .blink import BlinkDriver
 from .rhubarb import (
     RhubarbError,
     RhubarbNotFoundError,
@@ -62,6 +63,7 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
         recognizer: Literal["pocketSphinx", "phonetic"] = "phonetic",
         rhubarb_timeout: float = 15.0,
         amplitude_fallback_threshold: float = 500.0,
+        enable_blink: bool = True,
     ) -> None:
         """
         Args:
@@ -79,6 +81,9 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
             amplitude_fallback_threshold: same meaning as
                 `ImageAvatarVideoGenerator`'s `open_threshold`, used only
                 when falling back.
+            enable_blink: periodically blink if `assets` has `face_blink.png`
+                loaded (no-op otherwise). Note blinking only happens while
+                audio is actively flowing — see README "Known limitations".
         """
         # fail fast at construction, not deep inside an async replay
         for v in Viseme:
@@ -94,6 +99,7 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
         self._recognizer = recognizer
         self._rhubarb_timeout = rhubarb_timeout
         self._amplitude_fallback_threshold = amplitude_fallback_threshold
+        self._blink = BlinkDriver() if enable_blink else None
 
         self._bytes_per_window = bytes_per_window(audio_sample_rate, video_fps, audio_channels)
 
@@ -267,8 +273,9 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
                     if rms_amplitude(window) > self._amplitude_fallback_threshold
                     else MouthState.CLOSED
                 )
+            blinking = self._blink.advance(1.0 / self._video_fps) if self._blink is not None else False
 
-            await self._out_queue.put(self._assets.video_frame(shape))
+            await self._out_queue.put(self._assets.video_frame(shape, blinking=blinking))
             await self._out_queue.put(
                 make_audio_frame(
                     window, sample_rate=self._audio_sample_rate, num_channels=job.num_channels

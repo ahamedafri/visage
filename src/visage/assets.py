@@ -2,6 +2,10 @@
 
 An asset set is a folder containing:
   - ``face.png``   — the base face/head, RGBA, defines the canvas size
+  - ``face_blink.png`` — OPTIONAL, same canvas size as ``face.png``, eyes
+    closed. If present, enables blinking (see ``blink.py``); if absent,
+    blinking is silently a no-op (the normal face is always used) rather
+    than raising.
   - ``mouth_<state>.png`` — one RGBA overlay per mouth-shape enum member
     requested (:class:`MouthState` and/or :class:`Viseme`), same canvas
     size as ``face.png``, transparent everywhere except the mouth
@@ -47,16 +51,28 @@ class Viseme(str, Enum):
 
 
 class AvatarAssets:
-    """Pre-composited (face + mouth) frames, ready to hand to ``rtc.VideoFrame``."""
+    """Pre-composited (face [+ blink] + mouth) frames, ready to hand to
+    ``rtc.VideoFrame``."""
 
-    def __init__(self, width: int, height: int, frames_rgb: dict[Enum, bytes]) -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        frames_rgb: dict[Enum, bytes],
+        frames_rgb_blink: dict[Enum, bytes] | None = None,
+    ) -> None:
         self._width = width
         self._height = height
         self._frames_rgb = frames_rgb
+        self._frames_rgb_blink = frames_rgb_blink
 
     @property
     def resolution(self) -> tuple[int, int]:
         return self._width, self._height
+
+    @property
+    def has_blink_art(self) -> bool:
+        return self._frames_rgb_blink is not None
 
     @classmethod
     def load(
@@ -75,7 +91,18 @@ class AvatarAssets:
         face = Image.open(face_path).convert("RGBA")
         width, height = face.size
 
+        blink_face_path = assets_dir / "face_blink.png"
+        blink_face: Image.Image | None = None
+        if blink_face_path.exists():
+            blink_face = Image.open(blink_face_path).convert("RGBA")
+            if blink_face.size != face.size:
+                raise ValueError(
+                    f"{blink_face_path} is {blink_face.size}, but face.png is "
+                    f"{face.size} — face_blink.png must match face.png's size exactly"
+                )
+
         frames_rgb: dict[Enum, bytes] = {}
+        frames_rgb_blink: dict[Enum, bytes] | None = {} if blink_face is not None else None
         for state in states:
             mouth_path = assets_dir / f"mouth_{state.value}.png"
             if not mouth_path.exists():
@@ -89,18 +116,27 @@ class AvatarAssets:
                     f"{mouth_path} is {mouth.size}, but face.png is {face.size} — "
                     "mouth overlays must match the face canvas size exactly"
                 )
-            composited = Image.alpha_composite(face, mouth).convert("RGB")
-            frames_rgb[state] = composited.tobytes()
+            frames_rgb[state] = Image.alpha_composite(face, mouth).convert("RGB").tobytes()
+            if blink_face is not None:
+                frames_rgb_blink[state] = (
+                    Image.alpha_composite(blink_face, mouth).convert("RGB").tobytes()
+                )
 
-        return cls(width, height, frames_rgb)
+        return cls(width, height, frames_rgb, frames_rgb_blink)
 
-    def video_frame(self, state: Enum) -> rtc.VideoFrame:
+    def video_frame(self, state: Enum, *, blinking: bool = False) -> rtc.VideoFrame:
         """A fresh ``rtc.VideoFrame`` for the given mouth shape.
+
+        ``blinking=True`` uses the eyes-closed face variant if one was
+        loaded (``face_blink.png`` present); otherwise it's silently
+        ignored and the normal face is used — no ``face_blink.png`` simply
+        means no blinking, not an error.
 
         Built fresh from cached bytes each call (cheap — no re-compositing)
         so callers never share a mutable frame instance across pushes.
         """
-        data = self._frames_rgb.get(state)
+        frames = self._frames_rgb_blink if (blinking and self._frames_rgb_blink is not None) else self._frames_rgb
+        data = frames.get(state)
         if data is None:
             raise KeyError(f"no frame loaded for mouth shape {state!r}")
         return rtc.VideoFrame(
