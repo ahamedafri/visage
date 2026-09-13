@@ -28,7 +28,9 @@ DEFAULT_ASSETS = Path(__file__).resolve().parent.parent / "assets" / "default"
 TTS_SAMPLE_RATE = 24000
 
 
-async def attach_avatar(room: rtc.Room, agent_session: AgentSession) -> AvatarRunner:
+async def attach_avatar(
+    room: rtc.Room, agent_session: AgentSession
+) -> tuple[AvatarRunner, ImageAvatarVideoGenerator]:
     assets = AvatarAssets.load(DEFAULT_ASSETS)
     video_gen = ImageAvatarVideoGenerator(
         assets,
@@ -61,12 +63,13 @@ async def attach_avatar(room: rtc.Room, agent_session: AgentSession) -> AvatarRu
     # straight into the room.
     agent_session.output.replace_audio_tail(audio_bridge)
 
-    return avatar_runner
+    return avatar_runner, video_gen
 
 
 # In your entrypoint, after `agent_session.start(...)`:
 #
-#     avatar_runner = await attach_avatar(ctx.room, agent_session)
+#     avatar_runner, video_gen = await attach_avatar(ctx.room, agent_session)
 #     ...
 #     # on shutdown:
 #     await avatar_runner.aclose()
+#     await video_gen.aclose()  # stops the idle-heartbeat/blink background task

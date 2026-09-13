@@ -16,8 +16,19 @@ per window from that window's RMS amplitude, and enqueues a
 This gets audio and video roughly frame-accurate to each other (they're
 derived from the same PCM window) — LiveKit's ``AVSynchronizer`` (used
 inside ``AvatarRunner``) handles the actual realtime pacing once frames are
-pushed. See the project README for the known limits of amplitude-only sync
-vs. real viseme timing (Phase 2, ``RhubarbVisemeVideoGenerator``).
+pushed: it paces output to real wall-clock time via a bounded internal
+queue regardless of how fast we push (verified by reading the installed
+``livekit.rtc.synchronizer.AVSynchronizer``/``_FPSController``), which is
+also what makes the idle heartbeat below safe to just push into.
+See the project README for the known limits of amplitude-only sync vs.
+real viseme timing (Phase 2, ``RhubarbVisemeVideoGenerator``).
+
+Phase 2b (idle heartbeat): when blink art is loaded, a background task
+pushes blink-only video frames (no audio) at a slow ``idle_fps`` while no
+speech is flowing, so the avatar keeps blinking between agent turns instead
+of freezing on its last frame. It paces itself with real ``asyncio.sleep``
+(unlike the speech path, nothing here naturally throttles production) and
+pauses immediately once real speech resumes.
 """
 
 from __future__ import annotations
@@ -46,6 +57,7 @@ class ImageAvatarVideoGenerator(VideoGenerator):
         audio_channels: int = 1,
         open_threshold: float = 500.0,
         enable_blink: bool = True,
+        idle_fps: float = 5.0,
     ) -> None:
         """
         Args:
@@ -61,14 +73,19 @@ class ImageAvatarVideoGenerator(VideoGenerator):
                 which the mouth is considered "open". Tune per-voice — TTS
                 loudness varies a lot by provider/voice.
             enable_blink: periodically blink if `assets` has `face_blink.png`
-                loaded (no-op otherwise). Note blinking only happens while
-                audio is actively flowing — see README "Known limitations".
+                loaded. Also gates the idle heartbeat (below) — both are
+                no-ops without blink art, since there'd be nothing to
+                animate while idle.
+            idle_fps: frame rate for the idle-heartbeat blink loop between
+                utterances. Deliberately lower than `video_fps` — only the
+                eyes are moving, no need for full rate.
         """
         self._assets = assets
         self._video_fps = video_fps
         self._audio_sample_rate = audio_sample_rate
         self._audio_channels = audio_channels
         self._open_threshold = open_threshold
+        self._idle_fps = idle_fps
         self._blink = BlinkDriver() if enable_blink else None
 
         self._bytes_per_window = bytes_per_window(audio_sample_rate, video_fps, audio_channels)
@@ -77,6 +94,13 @@ class ImageAvatarVideoGenerator(VideoGenerator):
         self._out_queue: asyncio.Queue[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd] = (
             asyncio.Queue()
         )
+
+        # Idle heartbeat: only meaningful if we can actually blink.
+        self._idle_event = asyncio.Event()
+        self._idle_event.set()
+        self._idle_task: asyncio.Task[None] | None = None
+        if self._blink is not None and assets.has_blink_art:
+            self._idle_task = asyncio.create_task(self._idle_loop())
 
     @property
     def video_resolution(self) -> tuple[int, int]:
@@ -99,7 +123,10 @@ class ImageAvatarVideoGenerator(VideoGenerator):
                 self._pcm_buffer.clear()
                 await self._emit_window(padded, self._audio_channels)
             await self._out_queue.put(AudioSegmentEnd())
+            self._idle_event.set()  # utterance fully emitted — resume idle heartbeat
             return
+
+        self._idle_event.clear()  # speech is flowing — pause idle heartbeat
 
         if frame.sample_rate != self._audio_sample_rate:
             logger.warning(
@@ -135,6 +162,7 @@ class ImageAvatarVideoGenerator(VideoGenerator):
                 self._out_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        self._idle_event.set()  # interrupted -> no more speech incoming, resume idle heartbeat
 
     def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         return self._stream()
@@ -142,3 +170,29 @@ class ImageAvatarVideoGenerator(VideoGenerator):
     async def _stream(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         while True:
             yield await self._out_queue.get()
+
+    async def _idle_loop(self) -> None:
+        assert self._blink is not None
+        interval = 1.0 / self._idle_fps
+        while True:
+            await self._idle_event.wait()
+            await asyncio.sleep(interval)
+            if not self._idle_event.is_set():
+                continue  # speech started mid-sleep — skip this tick, don't fight it
+            blinking = self._blink.advance(interval)
+            await self._out_queue.put(self._assets.video_frame(MouthState.CLOSED, blinking=blinking))
+
+    async def aclose(self) -> None:
+        """Stop the idle-heartbeat background task, if one is running.
+
+        Not called automatically by `AvatarRunner` — call this yourself on
+        job shutdown if you construct short-lived generator instances (e.g.
+        in tests); for the common case of one generator per agent process,
+        it's fine to just let the process exit.
+        """
+        if self._idle_task is not None:
+            self._idle_task.cancel()
+            try:
+                await self._idle_task
+            except asyncio.CancelledError:
+                pass

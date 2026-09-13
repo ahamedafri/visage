@@ -15,6 +15,11 @@ fails or times out, this generator logs a warning and falls back to
 amplitude-only lip-sync (reusing ``MouthState.OPEN/CLOSED`` from the same
 ``AvatarAssets``) for that utterance rather than dropping audio or crashing
 the agent.
+
+Phase 2b (idle heartbeat): when blink art is loaded, a background task
+pushes ``Viseme.X`` (idle/rest) blink-only video frames at a slow
+``idle_fps`` while no utterance is buffering/replaying, so the avatar keeps
+blinking between agent turns instead of freezing.
 """
 
 from __future__ import annotations
@@ -64,6 +69,7 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
         rhubarb_timeout: float = 15.0,
         amplitude_fallback_threshold: float = 500.0,
         enable_blink: bool = True,
+        idle_fps: float = 5.0,
     ) -> None:
         """
         Args:
@@ -82,8 +88,10 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
                 `ImageAvatarVideoGenerator`'s `open_threshold`, used only
                 when falling back.
             enable_blink: periodically blink if `assets` has `face_blink.png`
-                loaded (no-op otherwise). Note blinking only happens while
-                audio is actively flowing — see README "Known limitations".
+                loaded. Also gates the idle heartbeat (below) — both are
+                no-ops without blink art.
+            idle_fps: frame rate for the idle-heartbeat blink loop between
+                utterances (while no audio is buffering or replaying).
         """
         # fail fast at construction, not deep inside an async replay
         for v in Viseme:
@@ -99,6 +107,7 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
         self._recognizer = recognizer
         self._rhubarb_timeout = rhubarb_timeout
         self._amplitude_fallback_threshold = amplitude_fallback_threshold
+        self._idle_fps = idle_fps
         self._blink = BlinkDriver() if enable_blink else None
 
         self._bytes_per_window = bytes_per_window(audio_sample_rate, video_fps, audio_channels)
@@ -120,6 +129,13 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
         self._warned_missing_once = False
 
         self._worker_task = asyncio.create_task(self._run_worker())
+
+        # Idle heartbeat: only meaningful if we can actually blink.
+        self._idle_event = asyncio.Event()
+        self._idle_event.set()
+        self._idle_task: asyncio.Task[None] | None = None
+        if self._blink is not None and assets.has_blink_art:
+            self._idle_task = asyncio.create_task(self._idle_loop())
 
     def set_next_utterance_text(self, text: str | None) -> None:
         """Best-effort known TTS transcript for the *next* utterance (i.e.
@@ -154,6 +170,8 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
             await self._pending_jobs.put(job)
             return
 
+        self._idle_event.clear()  # speech is flowing — pause idle heartbeat
+
         if frame.sample_rate != self._audio_sample_rate:
             logger.warning(
                 "pushed audio sample_rate=%d does not match configured "
@@ -187,6 +205,7 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
                 self._out_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        self._idle_event.set()  # interrupted -> no more speech incoming, resume idle heartbeat
 
     def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
         return self._stream()
@@ -202,6 +221,8 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
             cues = await self._resolve_cues(job)
             await self._replay(job, cues)
             await self._out_queue.put(AudioSegmentEnd())
+            if self._pending_jobs.empty():
+                self._idle_event.set()  # nothing else queued — resume idle heartbeat
 
     async def _resolve_cues(self, job: _UtteranceJob) -> list[VisemeCue] | None:
         if not job.pcm_bytes:
@@ -281,3 +302,30 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
                     window, sample_rate=self._audio_sample_rate, num_channels=job.num_channels
                 )
             )
+
+    async def _idle_loop(self) -> None:
+        assert self._blink is not None
+        interval = 1.0 / self._idle_fps
+        while True:
+            await self._idle_event.wait()
+            await asyncio.sleep(interval)
+            if not self._idle_event.is_set():
+                continue  # speech started mid-sleep — skip this tick, don't fight it
+            blinking = self._blink.advance(interval)
+            await self._out_queue.put(self._assets.video_frame(Viseme.X, blinking=blinking))
+
+    async def aclose(self) -> None:
+        """Stop the background worker and idle-heartbeat tasks.
+
+        Not called automatically by `AvatarRunner` — call this yourself on
+        job shutdown if you construct short-lived generator instances (e.g.
+        in tests); for the common case of one generator per agent process,
+        it's fine to just let the process exit.
+        """
+        for task in (self._worker_task, self._idle_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass

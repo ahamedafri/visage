@@ -13,12 +13,13 @@ flat 2D art you can swap for your own.
 ## Status
 
 **v1 (amplitude-only lip-sync) — working**, **Phase 2a (real viseme timing
-via Rhubarb Lip Sync) — working, opt-in**, and **Phase 2b (blinking) —
-working.** `ImageAvatarVideoGenerator` (amplitude, minimal latency) is
-still the default; `RhubarbVisemeVideoGenerator` (real per-phoneme mouth
-shapes, added latency) is a drop-in alternative — see
+via Rhubarb Lip Sync) — working, opt-in**, and **Phase 2b (blinking +
+idle heartbeat) — working.** `ImageAvatarVideoGenerator` (amplitude,
+minimal latency) is still the default; `RhubarbVisemeVideoGenerator` (real
+per-phoneme mouth shapes, added latency) is a drop-in alternative — see
 [Real viseme timing](#real-viseme-timing-rhubarb-lip-sync) below. Both
-generators blink periodically if `face_blink.png` is present (see
+generators blink periodically — including between agent turns, not just
+while speaking — if `face_blink.png` is present (see
 [Blinking](#blinking)). Built and verified against `livekit-agents==1.8.1`.
 
 ## Quickstart
@@ -104,17 +105,24 @@ in your asset folder, and both generators use it unless you pass
 is silently ignored rather than raising, so existing custom asset folders
 keep working unchanged.
 
-**Known limitation: blinking (and all animation) only happens while audio
-is actively flowing.** Both generators only produce video frames from
-pushed audio windows — there's no continuous idle frame-publishing loop, so
-the avatar freezes on its last frame between agent turns rather than
-blinking while silently waiting. Fixing that needs a separate
-heartbeat/idle frame source feeding `AvatarRunner` even with no speech
-happening, which is a real architecture addition, not a tuning knob —
-deferred (see Roadmap). Idle head-sway (subtle bobbing/movement) was also
-considered for this phase and deferred for the same reason plus the extra
-transform/canvas-padding work it needs — call it a documented "won't do
-yet" rather than a partial attempt.
+**Idle heartbeat:** when blink art is loaded, each generator also runs a
+background task that keeps blinking between agent turns — not just while
+audio is flowing — by pushing blink-only video frames (no audio) at a slow
+`idle_fps` (default 5, tunable) whenever no utterance is buffering or
+replaying. It pauses the instant real speech starts and resumes as soon as
+that utterance is fully emitted (or immediately, on interruption via
+`clear_buffer`). This relies on `livekit.rtc.AVSynchronizer`'s own internal
+bounded queue + real-time pacing (verified by reading its source) to safely
+absorb whatever we push — our heartbeat still self-paces with `asyncio.sleep`
+so it doesn't pre-queue idle frames far into the future and become
+unresponsive to an interruption. If you construct short-lived generator
+instances yourself (e.g. in tests), call `await video_gen.aclose()` to stop
+this background task — not needed for the normal one-generator-per-agent-process
+case, since `asyncio.run`/job shutdown cancels it anyway.
+
+Idle head-sway (subtle bobbing/movement) was considered for this phase too
+and deferred — it needs off-canvas padding/transform work disproportionate
+to the visual payoff. Documented as a "won't do yet," not a partial attempt.
 
 ## How it works
 
@@ -176,21 +184,19 @@ illustration tool (Figma, Canva, Aseprite) works — no 3D, no rigging.
 - **G/H extended viseme shapes have no dedicated art** — they map to the
   nearest basic shape we do have art for (G→F, H→C) rather than being drawn
   distinctly.
-- **Blinking (and all animation) stops between agent turns** — see
-  [Blinking](#blinking); there's no idle head-sway either (deferred, not
-  attempted).
+- **No idle head-sway**, only blinking — see [Blinking](#blinking)
+  (deferred, not attempted).
 
 ## Roadmap
 
 - [x] Phase 0/1 — pipeline proof + amplitude-only MVP
 - [x] Phase 2a — real viseme timing via Rhubarb Lip Sync (opt-in `RhubarbVisemeVideoGenerator`)
-- [x] Phase 2b — blinking
+- [x] Phase 2b — blinking + idle heartbeat (keeps blinking between agent turns)
 - [ ] Phase 3 — swappable art-set packaging, published as a pip package
 - [ ] Phase 4 — demo video, community distribution
 - [ ] fast-follow — dedicated G/H viseme art; verify a safe `AgentSession`
       hook to auto-wire known TTS transcript text into rhubarb's `-d` flag;
-      continuous idle animation (blink/sway between turns) via a heartbeat
-      frame source
+      idle head-sway
 
 ## License
 

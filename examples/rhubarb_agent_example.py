@@ -88,3 +88,4 @@ async def attach_avatar(room: rtc.Room, agent_session: AgentSession) -> tuple[Av
 #     ...
 #     # on shutdown:
 #     await avatar_runner.aclose()
+#     await video_gen.aclose()  # stops the worker + idle-heartbeat/blink background tasks
