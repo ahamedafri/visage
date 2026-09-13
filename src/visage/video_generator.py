@@ -17,7 +17,7 @@ This gets audio and video roughly frame-accurate to each other (they're
 derived from the same PCM window) — LiveKit's ``AVSynchronizer`` (used
 inside ``AvatarRunner``) handles the actual realtime pacing once frames are
 pushed. See the project README for the known limits of amplitude-only sync
-vs. real viseme timing (planned Phase 2, via Rhubarb Lip Sync).
+vs. real viseme timing (Phase 2, ``RhubarbVisemeVideoGenerator``).
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 
-import numpy as np
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd, VideoGenerator
 
+from ._pcm_windowing import bytes_per_window, make_audio_frame, pad_to_window, rms_amplitude
 from .assets import AvatarAssets, MouthState
 
 logger = logging.getLogger("visage")
@@ -65,8 +65,7 @@ class ImageAvatarVideoGenerator(VideoGenerator):
         self._audio_channels = audio_channels
         self._open_threshold = open_threshold
 
-        self._samples_per_window = max(1, round(audio_sample_rate / video_fps))
-        self._bytes_per_window = self._samples_per_window * audio_channels * 2  # int16
+        self._bytes_per_window = bytes_per_window(audio_sample_rate, video_fps, audio_channels)
 
         self._pcm_buffer = bytearray()
         self._out_queue: asyncio.Queue[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd] = (
@@ -90,9 +89,7 @@ class ImageAvatarVideoGenerator(VideoGenerator):
             if self._pcm_buffer:
                 # flush a final, silence-padded partial window rather than
                 # dropping the tail of the last word
-                padded = bytes(self._pcm_buffer) + b"\x00" * (
-                    self._bytes_per_window - len(self._pcm_buffer)
-                )
+                padded = pad_to_window(bytes(self._pcm_buffer), self._bytes_per_window)
                 self._pcm_buffer.clear()
                 await self._emit_window(padded, self._audio_channels)
             await self._out_queue.put(AudioSegmentEnd())
@@ -114,16 +111,11 @@ class ImageAvatarVideoGenerator(VideoGenerator):
             await self._emit_window(window, frame.num_channels)
 
     async def _emit_window(self, pcm_bytes: bytes, num_channels: int) -> None:
-        samples = np.frombuffer(pcm_bytes, dtype=np.int16)
-        rms = float(np.sqrt(np.mean(samples.astype(np.float64) ** 2))) if len(samples) else 0.0
-        state = MouthState.OPEN if rms > self._open_threshold else MouthState.CLOSED
+        state = MouthState.OPEN if rms_amplitude(pcm_bytes) > self._open_threshold else MouthState.CLOSED
 
         video_frame = self._assets.video_frame(state)
-        audio_frame = rtc.AudioFrame(
-            data=pcm_bytes,
-            sample_rate=self._audio_sample_rate,
-            num_channels=num_channels,
-            samples_per_channel=len(pcm_bytes) // 2 // num_channels,
+        audio_frame = make_audio_frame(
+            pcm_bytes, sample_rate=self._audio_sample_rate, num_channels=num_channels
         )
         await self._out_queue.put(video_frame)
         await self._out_queue.put(audio_frame)

@@ -12,9 +12,12 @@ flat 2D art you can swap for your own.
 
 ## Status
 
-**v1 (amplitude-only lip-sync) — working.** The mouth toggles open/closed
-based on audio loudness; no real viseme/phoneme timing yet (see
-[Roadmap](#roadmap)). Built and verified against `livekit-agents==1.8.1`.
+**v1 (amplitude-only lip-sync) — working**, and **Phase 2 (real viseme
+timing via Rhubarb Lip Sync) — working, opt-in.** `ImageAvatarVideoGenerator`
+(amplitude, minimal latency) is still the default; `RhubarbVisemeVideoGenerator`
+(real per-phoneme mouth shapes, added latency) is a drop-in alternative —
+see [Real viseme timing](#real-viseme-timing-rhubarb-lip-sync) below. Built
+and verified against `livekit-agents==1.8.1`.
 
 ## Quickstart
 
@@ -23,17 +26,68 @@ python -m venv .venv
 .venv/Scripts/activate   # or `source .venv/bin/activate` on macOS/Linux
 pip install -e .
 
-# generates assets/default/{face,mouth_closed,mouth_open}.png
+# generates assets/default/: face.png, mouth_closed/open.png (amplitude mode),
+# mouth_x/a/b/c/d/e/f.png (viseme mode)
 python scripts/generate_placeholder_assets.py
 
 # exercises the full compositing + audio-chunking pipeline with no LiveKit
 # room needed, and writes example output frames to assets/_smoke_test_output/
 python scripts/smoke_test.py
+
+# unit tests (WAV writing, rhubarb JSON parsing, replay pacing, fallback
+# behavior) — no rhubarb binary needed for any of these
+pip install -e ".[dev]"
+pytest
 ```
 
 Then wire it into your agent — see [`examples/local_agent_example.py`](examples/local_agent_example.py)
 for the minimal `AgentSession` integration (co-located "local mode": the
 avatar runs in the same process as your agent, no separate worker needed).
+
+## Real viseme timing (Rhubarb Lip Sync)
+
+For accurate per-phoneme mouth shapes instead of amplitude-only open/closed,
+use `RhubarbVisemeVideoGenerator` — see
+[`examples/rhubarb_agent_example.py`](examples/rhubarb_agent_example.py).
+It's a drop-in alternative to `ImageAvatarVideoGenerator`, sharing the same
+`AvatarAssets`/`AgentSession` wiring pattern.
+
+**Install Rhubarb Lip Sync** (not pip-installable — a separate compiled
+binary): download the zip for your platform from its
+[releases page](https://github.com/DanielSWolf/rhubarb-lip-sync/releases),
+extract `rhubarb`/`rhubarb.exe`, then either put it on your `PATH` or set
+`RHUBARB_PATH=/full/path/to/rhubarb`.
+
+**Latency tradeoff:** Rhubarb is a *batch* tool — it needs a complete
+utterance's audio before it can produce any timing at all, unlike v1's
+per-frame streaming. So this generator buffers a full utterance, then runs
+Rhubarb as a subprocess, then replays the buffered audio against the now-known
+viseme timeline — meaning the avatar does not start moving for a reply until
+that reply's full audio has arrived *and* Rhubarb has finished processing it.
+Use `ImageAvatarVideoGenerator` instead if minimal latency matters more than
+lip-sync accuracy for your use case.
+
+**Graceful fallback:** if the `rhubarb` binary is missing, or a given
+utterance's invocation fails or times out, `RhubarbVisemeVideoGenerator` logs
+one warning and falls back to amplitude-only lip-sync for that utterance
+(reusing `MouthState.OPEN/CLOSED` from the same loaded assets) rather than
+dropping audio or crashing your agent.
+
+**Known transcript text:** since this is TTS output, you typically know the
+exact words about to be spoken *before* they're synthesized — unlike Rhubarb's
+usual use case. Call `video_gen.set_next_utterance_text(text)` right before
+triggering that speech (e.g. before `session.say(text)`) to pass it through
+to Rhubarb as `-d` dialog text, which recognizes speech far more accurately
+than the default recognizer. This isn't wired automatically to any generic
+`AgentSession` event yet (see Roadmap) — without it, the language-independent
+`"phonetic"` recognizer is used, which still works, just less precisely.
+
+Verify your own install end-to-end with a real speech clip (a synthetic tone
+won't produce meaningful visemes):
+
+```bash
+python scripts/smoke_test_rhubarb.py path/to/short_speech_clip.wav
+```
 
 ## How it works
 
@@ -66,17 +120,18 @@ avatar runs in the same process as your agent, no separate worker needed).
 
 Drop a folder anywhere with:
 - `face.png` — RGBA, defines the canvas size
-- `mouth_closed.png`, `mouth_open.png` — RGBA overlays, **same pixel
-  dimensions as `face.png`**, transparent everywhere except the mouth
+- `mouth_closed.png`, `mouth_open.png` — RGBA overlays for
+  `ImageAvatarVideoGenerator` (amplitude mode)
+- `mouth_x.png` .. `mouth_f.png` — RGBA overlays for
+  `RhubarbVisemeVideoGenerator` (viseme mode) — only needed if you use it
 
-then `AvatarAssets.load("path/to/your/folder")`. Any flat illustration tool
-(Figma, Canva, Aseprite) works — no 3D, no rigging.
+All overlays must be **the same pixel dimensions as `face.png`**, transparent
+everywhere except the mouth. Then `AvatarAssets.load("path/to/your/folder", states=(*MouthState, *Viseme))`
+(or just `MouthState/Viseme` alone if you only need one mode). Any flat
+illustration tool (Figma, Canva, Aseprite) works — no 3D, no rigging.
 
-## Known limitations (v1)
+## Known limitations
 
-- **No real viseme timing** — amplitude-only open/closed is a rough
-  approximation, not per-phoneme lip-sync. Planned for Phase 2 (Rhubarb Lip
-  Sync integration).
 - **No audio resampling** — `audio_sample_rate` must match your TTS
   provider's actual output rate exactly, or audio will play at the wrong
   pitch/speed. `push_audio` logs a warning on mismatch but does not correct it.
@@ -84,16 +139,25 @@ then `AvatarAssets.load("path/to/your/folder")`. Any flat illustration tool
   RGB24 (no alpha channel), so anything outside your face art renders black.
   Fine against a dark UI; needs a background color/image if you want
   something else.
-- **`open_threshold` is unit-less relative to int16 PCM RMS** and will need
-  tuning per TTS voice/provider — loudness varies a lot.
+- **`open_threshold`/`amplitude_fallback_threshold` are unit-less relative to
+  int16 PCM RMS** and will need tuning per TTS voice/provider — loudness
+  varies a lot.
+- **Rhubarb mode adds per-utterance latency** (subprocess start + processing
+  time) before the avatar starts moving for that reply — see
+  [Real viseme timing](#real-viseme-timing-rhubarb-lip-sync).
+- **G/H extended viseme shapes have no dedicated art** — they map to the
+  nearest basic shape we do have art for (G→F, H→C) rather than being drawn
+  distinctly.
 
 ## Roadmap
 
-- [x] Phase 0/1 — pipeline proof + amplitude-only MVP (this repo, today)
-- [ ] Phase 2 — real viseme timing via Rhubarb Lip Sync, more mouth shapes,
-      blink/idle-sway polish
+- [x] Phase 0/1 — pipeline proof + amplitude-only MVP
+- [x] Phase 2a — real viseme timing via Rhubarb Lip Sync (opt-in `RhubarbVisemeVideoGenerator`)
+- [ ] Phase 2b — blink/idle-sway polish
 - [ ] Phase 3 — swappable art-set packaging, published as a pip package
 - [ ] Phase 4 — demo video, community distribution
+- [ ] fast-follow — dedicated G/H viseme art; verify a safe `AgentSession`
+      hook to auto-wire known TTS transcript text into rhubarb's `-d` flag
 
 ## License
 
