@@ -10,3 +10,4 @@ dist/
 *.mp4
 !examples/**/*.wav
 .pytest_cache/
+/_smoke_test_output/

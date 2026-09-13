@@ -1,13 +1,19 @@
 import asyncio
-from pathlib import Path
 
 import numpy as np
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd
 
-from visage import AvatarAssets, ImageAvatarVideoGenerator, MouthState, RhubarbVisemeVideoGenerator, Viseme
+from visage import (
+    AvatarAssets,
+    ImageAvatarVideoGenerator,
+    MouthState,
+    RhubarbVisemeVideoGenerator,
+    Viseme,
+    default_assets_dir,
+)
 
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "default"
+ASSETS_DIR = default_assets_dir()
 SAMPLE_RATE = 24000
 
 

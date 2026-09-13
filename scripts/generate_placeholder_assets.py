@@ -4,25 +4,28 @@ Flat, emoji-style shapes drawn with Pillow — no artist needed. Run:
 
     python scripts/generate_placeholder_assets.py
 
-Writes into assets/default/:
+Writes into src/visage/default_assets/ — the packaged default asset set
+(shipped with `pip install visage` via package-data, see pyproject.toml):
   - face.png, mouth_closed.png, mouth_open.png       (v1, MouthState)
   - mouth_x.png .. mouth_f.png                        (Phase 2a, Viseme)
   - face_blink.png                                    (Phase 2b, blinking)
 
-Swap these for real art later; anything with the same canvas size and the
-same file names works as a drop-in replacement (see README "Custom art").
+This is only for regenerating/tweaking the *placeholder* art during
+development. To use your own art in a project depending on visage, load a
+separate folder with `AvatarAssets.load("path/to/your/folder")` instead —
+anything with the same canvas size and the same file names works as a
+drop-in replacement (see README "Custom art").
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from PIL import Image, ImageDraw
 
 from visage.assets import Viseme
+from visage.paths import default_assets_dir
 
 SIZE = (512, 512)
-OUT_DIR = Path(__file__).resolve().parent.parent / "assets" / "default"
+OUT_DIR = default_assets_dir()
 
 FACE_COLOR = (247, 202, 24, 255)  # warm yellow, emoji-ish
 OUTLINE = (40, 40, 40, 255)

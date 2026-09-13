@@ -21,11 +21,11 @@ import numpy as np
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd
 
-from visage import AvatarAssets, ImageAvatarVideoGenerator
+from visage import AvatarAssets, ImageAvatarVideoGenerator, default_assets_dir
 from visage.assets import MouthState
 
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "default"
-OUT_DIR = Path(__file__).resolve().parent.parent / "assets" / "_smoke_test_output"
+ASSETS_DIR = default_assets_dir()
+OUT_DIR = Path(__file__).resolve().parent.parent / "_smoke_test_output"
 
 SAMPLE_RATE = 24000
 CHANNELS = 1

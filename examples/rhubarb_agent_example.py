@@ -16,15 +16,13 @@ back to amplitude-only lip-sync automatically — it will not crash your agent.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from livekit import rtc
 from livekit.agents import AgentSession
 from livekit.agents.voice.avatar import AvatarOptions, AvatarRunner, QueueAudioOutput
 
-from visage import AvatarAssets, MouthState, RhubarbVisemeVideoGenerator, Viseme
+from visage import AvatarAssets, MouthState, RhubarbVisemeVideoGenerator, Viseme, default_assets_dir
 
-DEFAULT_ASSETS = Path(__file__).resolve().parent.parent / "assets" / "default"
+DEFAULT_ASSETS = default_assets_dir()  # swap for your own art: AvatarAssets.load("path/to/folder")
 
 # Must match your TTS output's sample rate — see RhubarbVisemeVideoGenerator's
 # docstring. e.g. Cartesia's sonic-2 over LiveKit Inference is commonly 24000.
