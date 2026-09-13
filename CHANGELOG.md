@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **Photoreal/full-frame art support** (`AvatarAssets.load_full_frames`): a
+  second asset-loading convention, alongside the original overlay
+  compositing (`face.png` + transparent `mouth_<state>.png` overlays), for
+  complete already-rendered images — e.g. from an identity-consistent AI
+  photo generator (Ideogram Character, FLUX PuLID, InstantID/IP-Adapter-FaceID)
+  taking one reference photo and producing one full image per required mouth
+  shape. No compositing step, so no changes needed to either video
+  generator — both loading paths produce an identical `AvatarAssets`. Per-state
+  optional blink art (`full_<state>_blink.png`), falling back to the non-blink
+  frame for states without one. `RhubarbVisemeVideoGenerator`'s existing
+  fail-fast validation now raises a clear, actionable `ValueError` (was a bare
+  `KeyError`) if a photoreal set is missing the `MouthState` coverage its
+  amplitude-fallback path needs.
+- 6 new tests (`tests/test_assets_full_frames.py`), all synthetic fixtures,
+  no real photos needed — 26 tests total now.
+
 ## 0.1.0
 
 Initial local release — everything built and verified so far, not yet published anywhere.

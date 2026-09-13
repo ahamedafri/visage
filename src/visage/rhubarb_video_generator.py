@@ -94,10 +94,21 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
                 utterances (while no audio is buffering or replaying).
         """
         # fail fast at construction, not deep inside an async replay
-        for v in Viseme:
-            assets.video_frame(v)
-        for m in MouthState:
-            assets.video_frame(m)
+        for shape in (*Viseme, *MouthState):
+            try:
+                assets.video_frame(shape)
+            except KeyError as e:
+                raise ValueError(
+                    "RhubarbVisemeVideoGenerator requires assets with a frame for "
+                    "every Viseme AND every MouthState — MouthState frames back the "
+                    "amplitude-fallback path used when rhubarb is unavailable or a "
+                    f"given utterance's invocation fails. {e}. If you built a "
+                    "photoreal/full-frame set covering only Viseme shapes, either "
+                    "add full_closed.png and full_open.png too (see README "
+                    "'Using AI-generated / photoreal art'), or use "
+                    "ImageAvatarVideoGenerator instead if you don't need Rhubarb's "
+                    "fallback safety net."
+                ) from e
 
         self._assets = assets
         self._video_fps = video_fps
