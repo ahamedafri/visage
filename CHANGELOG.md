@@ -16,7 +16,26 @@
   `KeyError`) if a photoreal set is missing the `MouthState` coverage its
   amplitude-fallback path needs.
 - 6 new tests (`tests/test_assets_full_frames.py`), all synthetic fixtures,
-  no real photos needed — 26 tests total now.
+  no real photos needed.
+- **Audio resampling + channel normalization** (fixes a silent correctness
+  bug): pushed frames whose sample rate or channel count differ from the
+  generator's configured `audio_sample_rate`/`audio_channels` are now
+  normalized (rate via LiveKit's SoX-backed `rtc.AudioResampler`, mono ↔ stereo
+  via numpy) instead of being passed through and playing back at the wrong
+  pitch/speed with only a warning. The resampler is flushed at each
+  `AudioSegmentEnd` so utterance tails aren't lost, and reset on interruption.
+- **`background=(r, g, b)`** option on both `AvatarAssets.load` and
+  `load_full_frames` to composite a transparent canvas onto a solid color
+  (published video is RGB24, so transparency otherwise rendered black).
+- **Dedicated G/H viseme art**: `Viseme.G` (upper teeth on lower lip, F/V)
+  and `Viseme.H` (raised tongue, L) are now real enum members with their own
+  placeholder shapes, instead of being mapped to the nearest basic shape.
+  Custom overlay/full-frame asset sets used with `RhubarbVisemeVideoGenerator`
+  now need `mouth_g.png`/`mouth_h.png` (or `full_g.png`/`full_h.png`).
+- **GitHub Actions CI**: pytest on a Linux + Windows × Python 3.10/3.13
+  matrix, plus a job that builds the wheel and installs it into a fresh venv
+  to prove the packaged default art is present and loadable.
+- 37 tests total.
 
 ## 0.1.0
 

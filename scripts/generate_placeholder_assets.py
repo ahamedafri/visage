@@ -72,37 +72,54 @@ def make_mouth_open() -> Image.Image:
     return img
 
 
-# (half_width, top_offset, bottom_offset, show_teeth, round_shape) per viseme,
-# offsets relative to face center — bigger spread = more open. Loosely: X/A
-# closed, B/H barely parted, C/E medium, D widest, F/G puckered round.
-_VISEME_SHAPE_PARAMS: dict[Viseme, tuple[int, int, int, bool, bool]] = {
-    Viseme.X: (55, 80, 100, False, False),  # idle/rest — same as closed
-    Viseme.A: (55, 80, 100, False, False),  # closed lips (P/B/M) — same as closed
-    Viseme.B: (50, 78, 108, True, False),  # slightly parted, teeth (consonants/"EE")
-    Viseme.C: (52, 68, 122, True, False),  # medium open ("EH"/"AE")
-    Viseme.D: (58, 55, 145, True, False),  # widest open ("AA")
-    Viseme.E: (60, 65, 128, False, False),  # medium open, rounder/wider ("AO"/"ER")
-    Viseme.F: (28, 75, 115, False, True),  # small puckered "O" (UW/OW/W)
+TONGUE_COLOR = (220, 110, 120, 255)
+
+# (half_width, top_offset, bottom_offset, teeth, tongue) per viseme, offsets
+# relative to face center — bigger spread = more open. Loosely: X/A closed,
+# B/G barely parted, C/E/H medium, D widest, F puckered round.
+#   teeth:  "none" | "top" (upper teeth row) | "bite" (upper teeth resting
+#           on the lower lip — the F/V shape)
+#   tongue: draw a raised tongue inside the mouth (the L shape)
+_VISEME_SHAPE_PARAMS: dict[Viseme, tuple[int, int, int, str, bool]] = {
+    Viseme.X: (55, 80, 100, "none", False),  # idle/rest — same as closed
+    Viseme.A: (55, 80, 100, "none", False),  # closed lips (P/B/M) — same as closed
+    Viseme.B: (50, 78, 108, "top", False),  # slightly parted, teeth (consonants/"EE")
+    Viseme.C: (52, 68, 122, "top", False),  # medium open ("EH"/"AE")
+    Viseme.D: (58, 55, 145, "top", False),  # widest open ("AA")
+    Viseme.E: (60, 65, 128, "none", False),  # medium open, rounder/wider ("AO"/"ER")
+    Viseme.F: (28, 75, 115, "none", False),  # small puckered "O" (UW/OW/W)
+    Viseme.G: (52, 82, 104, "bite", False),  # upper teeth on lower lip (F/V)
+    Viseme.H: (52, 66, 124, "top", True),  # tongue raised behind teeth (L)
 }
 
 
 def make_mouth_viseme(shape: Viseme) -> Image.Image:
-    half_width, top_offset, bottom_offset, show_teeth, round_shape = _VISEME_SHAPE_PARAMS[shape]
+    half_width, top_offset, bottom_offset, teeth, tongue = _VISEME_SHAPE_PARAMS[shape]
     img = Image.new("RGBA", SIZE, (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     cx, cy = SIZE[0] // 2, SIZE[1] // 2
 
-    box = (cx - half_width, cy + top_offset, cx + half_width, cy + bottom_offset)
-    if round_shape:
-        draw.ellipse(box, fill=MOUTH_COLOR)
-    else:
-        draw.ellipse(box, fill=MOUTH_COLOR)
-        if show_teeth:
-            teeth_bottom = cy + top_offset + (bottom_offset - top_offset) // 3
-            draw.rectangle(
-                (cx - half_width + 10, cy + top_offset + 5, cx + half_width - 10, teeth_bottom),
-                fill=TEETH_COLOR,
-            )
+    top, bottom = cy + top_offset, cy + bottom_offset
+    draw.ellipse((cx - half_width, top, cx + half_width, bottom), fill=MOUTH_COLOR)
+
+    if tongue:
+        # a raised tongue: pink ellipse filling the lower-middle of the mouth
+        draw.ellipse(
+            (cx - half_width + 14, top + (bottom - top) // 2, cx + half_width - 14, bottom - 6),
+            fill=TONGUE_COLOR,
+        )
+
+    if teeth == "top":
+        teeth_bottom = top + (bottom - top) // 3
+        draw.rectangle((cx - half_width + 10, top + 5, cx + half_width - 10, teeth_bottom), fill=TEETH_COLOR)
+    elif teeth == "bite":
+        # upper teeth overhanging the lower lip: a teeth row that extends
+        # slightly below the (thin) mouth opening
+        draw.rectangle((cx - half_width + 8, top + 2, cx + half_width - 8, bottom + 4), fill=TEETH_COLOR)
+        # thin lower-lip line under the teeth so it reads as "teeth on lip"
+        draw.rounded_rectangle(
+            (cx - half_width + 4, bottom + 2, cx + half_width - 4, bottom + 12), radius=6, fill=MOUTH_COLOR
+        )
     return img
 
 

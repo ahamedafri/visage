@@ -51,9 +51,9 @@ class MouthState(str, Enum):
 
 class Viseme(str, Enum):
     """Preston Blair-style viseme codes, matching Rhubarb Lip Sync's JSON
-    ``mouthCues[].value`` output (basic set only — no dedicated art for the
-    optional extended G/H shapes; see ``rhubarb.py`` for how those map onto
-    these instead). X = idle/rest/silence."""
+    ``mouthCues[].value`` output — the basic set A-F plus the optional
+    extended shapes G (upper teeth on lower lip: F/V) and H (tongue raised:
+    L). X = idle/rest/silence."""
 
     X = "x"
     A = "a"
@@ -62,6 +62,23 @@ class Viseme(str, Enum):
     D = "d"
     E = "e"
     F = "f"
+    G = "g"
+    H = "h"
+
+
+RGB = tuple[int, int, int]
+
+
+def _flatten(img: Image.Image, background: RGB | None) -> Image.Image:
+    """RGBA -> RGB. With no ``background``, alpha is simply dropped (so
+    transparent pixels come out as whatever RGB they carried — usually
+    black). With one, the image is composited over that solid color first,
+    which is what you want for a face on a transparent canvas."""
+    if background is None:
+        return img.convert("RGB")
+    rgba = img.convert("RGBA")
+    backdrop = Image.new("RGBA", rgba.size, (*background, 255))
+    return Image.alpha_composite(backdrop, rgba).convert("RGB")
 
 
 class AvatarAssets:
@@ -96,7 +113,15 @@ class AvatarAssets:
         cls,
         assets_dir: str | Path,
         states: tuple[Enum, ...] = (MouthState.CLOSED, MouthState.OPEN),
+        *,
+        background: RGB | None = None,
     ) -> "AvatarAssets":
+        """Overlay mode — see the module docstring for the file convention.
+
+        ``background``: optional solid RGB color to composite the (usually
+        transparent-canvas) face onto. Published video is RGB24 with no
+        alpha, so without this, transparent areas render black.
+        """
         assets_dir = Path(assets_dir)
         face_path = assets_dir / "face.png"
         if not face_path.exists():
@@ -133,11 +158,11 @@ class AvatarAssets:
                     f"{mouth_path} is {mouth.size}, but face.png is {face.size} — "
                     "mouth overlays must match the face canvas size exactly"
                 )
-            frames_rgb[state] = Image.alpha_composite(face, mouth).convert("RGB").tobytes()
+            frames_rgb[state] = _flatten(Image.alpha_composite(face, mouth), background).tobytes()
             if blink_face is not None:
-                frames_rgb_blink[state] = (
-                    Image.alpha_composite(blink_face, mouth).convert("RGB").tobytes()
-                )
+                frames_rgb_blink[state] = _flatten(
+                    Image.alpha_composite(blink_face, mouth), background
+                ).tobytes()
 
         return cls(width, height, frames_rgb, frames_rgb_blink)
 
@@ -146,6 +171,8 @@ class AvatarAssets:
         cls,
         assets_dir: str | Path,
         states: tuple[Enum, ...] = (MouthState.CLOSED, MouthState.OPEN),
+        *,
+        background: RGB | None = None,
     ) -> "AvatarAssets":
         """Load a folder of COMPLETE, already-rendered face images — one
         whole image per requested state, used directly as that state's
@@ -169,10 +196,10 @@ class AvatarAssets:
         image to define canvas size, and no compositing step to hide a
         mismatch, so this is checked explicitly.
 
-        Unlike :meth:`load`, images are converted straight to RGB — no
-        alpha compositing, since there's no overlay. A source PNG with
-        semi-transparent pixels will NOT be blended against any
-        background; export fully-opaque images.
+        Unlike :meth:`load`, there's no overlay compositing. Images are
+        converted straight to RGB, unless ``background`` is given, in which
+        case any transparent/semi-transparent pixels are composited over
+        that solid color first (same meaning as in :meth:`load`).
         """
         assets_dir = Path(assets_dir)
         if not states:
@@ -191,7 +218,7 @@ class AvatarAssets:
                     "no compositing) per requested state "
                     f"({', '.join(s.value for s in states)})"
                 )
-            img = Image.open(full_path).convert("RGB")
+            img = _flatten(Image.open(full_path), background)
             if size is None:
                 size, first_path = img.size, full_path
             elif img.size != size:
@@ -217,7 +244,7 @@ class AvatarAssets:
                     # requiring every state to have its own blink variant
                     frames_rgb_blink[state] = frames_rgb[state]
                     continue
-                blink_img = Image.open(blink_path).convert("RGB")
+                blink_img = _flatten(Image.open(blink_path), background)
                 if blink_img.size != (width, height):
                     raise ValueError(
                         f"{blink_path} is {blink_img.size}, but "

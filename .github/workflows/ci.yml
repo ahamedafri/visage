@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      # No rhubarb binary in CI on purpose: the suite is designed to pass
+      # without it (the Rhubarb generator falls back to amplitude mode and
+      # a test asserts exactly that).
+      - run: pytest -q
+
+  build:
+    name: wheel builds & installs clean
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build --wheel
+      # Install the wheel into a fresh venv (no repo checkout on sys.path)
+      # and prove the packaged default art is actually present + loadable.
+      - run: |
+          python -m venv /tmp/wheelcheck
+          /tmp/wheelcheck/bin/pip install dist/*.whl
+          /tmp/wheelcheck/bin/python -c "import visage; a = visage.AvatarAssets.load(visage.default_assets_dir(), states=(*visage.MouthState, *visage.Viseme)); print('ok', visage.__version__, a.resolution, a.has_blink_art)"

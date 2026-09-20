@@ -29,11 +29,18 @@ def test_parse_rhubarb_json_maps_codes_in_order():
     assert cues[-1].end == 0.47
 
 
-def test_parse_rhubarb_json_maps_extended_shapes_to_fallback():
+def test_parse_rhubarb_json_maps_extended_shapes_directly():
     raw = {"mouthCues": [{"start": 0.0, "end": 0.1, "value": "G"}, {"start": 0.1, "end": 0.2, "value": "H"}]}
     cues = parse_rhubarb_json(raw)
-    assert cues[0].viseme == Viseme.F  # G -> F (nearest rounded shape)
-    assert cues[1].viseme == Viseme.C  # H -> C (nearest open-vowel shape)
+    assert cues[0].viseme == Viseme.G
+    assert cues[1].viseme == Viseme.H
+
+
+def test_every_viseme_has_a_rhubarb_code():
+    # the mapping is derived from the enum, so every member must round-trip
+    for v in Viseme:
+        raw = {"mouthCues": [{"start": 0.0, "end": 0.1, "value": v.value.upper()}]}
+        assert parse_rhubarb_json(raw)[0].viseme == v
 
 
 def test_parse_rhubarb_json_unknown_code_falls_back_to_x():

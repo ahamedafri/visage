@@ -43,20 +43,9 @@ class VisemeCue(NamedTuple):
     viseme: Viseme
 
 
-# Rhubarb's basic set (A-F, X) maps directly. The optional extended shapes
-# (G, H) have no dedicated art in this project yet, so they fall back to the
-# nearest basic shape we do have art for.
-_RHUBARB_CODE_TO_VISEME: dict[str, Viseme] = {
-    "X": Viseme.X,
-    "A": Viseme.A,
-    "B": Viseme.B,
-    "C": Viseme.C,
-    "D": Viseme.D,
-    "E": Viseme.E,
-    "F": Viseme.F,
-    "G": Viseme.F,  # upper teeth on lower lip (F/V) -> nearest rounded shape
-    "H": Viseme.C,  # tongue raised (L) -> nearest open-vowel shape
-}
+# Rhubarb's basic set (A-F, X) plus the optional extended shapes (G, H) all
+# map 1:1 — every code has dedicated art in the default asset set.
+_RHUBARB_CODE_TO_VISEME: dict[str, Viseme] = {code.value.upper(): code for code in Viseme}
 
 
 def find_rhubarb_executable(explicit_path: str | None = None) -> Path:

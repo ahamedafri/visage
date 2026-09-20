@@ -40,6 +40,7 @@ from collections.abc import AsyncIterator
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd, VideoGenerator
 
+from ._audio_normalize import AudioNormalizer
 from ._pcm_windowing import bytes_per_window, make_audio_frame, pad_to_window, rms_amplitude
 from .assets import AvatarAssets, MouthState
 from .blink import BlinkDriver
@@ -63,12 +64,13 @@ class ImageAvatarVideoGenerator(VideoGenerator):
         Args:
             assets: pre-loaded face + mouth-shape images (see ``AvatarAssets.load``).
             video_fps: output video frame rate.
-            audio_sample_rate: MUST match the sample rate of the audio frames
-                that will actually be pushed (i.e. your agent's TTS output
-                rate). There is no resampling in v1 — a mismatch will not
-                raise here, but will play back at the wrong pitch/speed.
-                Verify this against your `AgentSession` TTS config.
-            audio_channels: channel count of pushed audio frames.
+            audio_sample_rate: the rate the avatar's audio track is
+                published at. Pushed frames at any other rate are resampled
+                to this (via LiveKit's `rtc.AudioResampler`), so it no
+                longer has to match your TTS output exactly — but matching
+                it avoids the resampling work entirely.
+            audio_channels: channel count for the published audio track.
+                Pushed mono/stereo frames are up/downmixed to match.
             open_threshold: RMS amplitude (on int16 PCM, 0-32768 range) above
                 which the mouth is considered "open". Tune per-voice — TTS
                 loudness varies a lot by provider/voice.
@@ -89,6 +91,7 @@ class ImageAvatarVideoGenerator(VideoGenerator):
         self._blink = BlinkDriver() if enable_blink else None
 
         self._bytes_per_window = bytes_per_window(audio_sample_rate, video_fps, audio_channels)
+        self._normalizer = AudioNormalizer(sample_rate=audio_sample_rate, channels=audio_channels)
 
         self._pcm_buffer = bytearray()
         self._out_queue: asyncio.Queue[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd] = (
@@ -116,40 +119,38 @@ class ImageAvatarVideoGenerator(VideoGenerator):
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         if isinstance(frame, AudioSegmentEnd):
+            # drain anything the resampler is still holding, then emit any
+            # full windows that produced
+            self._pcm_buffer.extend(self._normalizer.flush())
+            await self._emit_full_windows()
             if self._pcm_buffer:
                 # flush a final, silence-padded partial window rather than
                 # dropping the tail of the last word
                 padded = pad_to_window(bytes(self._pcm_buffer), self._bytes_per_window)
                 self._pcm_buffer.clear()
-                await self._emit_window(padded, self._audio_channels)
+                await self._emit_window(padded)
             await self._out_queue.put(AudioSegmentEnd())
             self._idle_event.set()  # utterance fully emitted — resume idle heartbeat
             return
 
         self._idle_event.clear()  # speech is flowing — pause idle heartbeat
 
-        if frame.sample_rate != self._audio_sample_rate:
-            logger.warning(
-                "pushed audio sample_rate=%d does not match configured "
-                "audio_sample_rate=%d — set audio_sample_rate to match your "
-                "TTS output, no resampling is done in v1",
-                frame.sample_rate,
-                self._audio_sample_rate,
-            )
+        self._pcm_buffer.extend(self._normalizer.push(frame))
+        await self._emit_full_windows()
 
-        self._pcm_buffer.extend(bytes(frame.data))
+    async def _emit_full_windows(self) -> None:
         while len(self._pcm_buffer) >= self._bytes_per_window:
             window = bytes(self._pcm_buffer[: self._bytes_per_window])
             del self._pcm_buffer[: self._bytes_per_window]
-            await self._emit_window(window, frame.num_channels)
+            await self._emit_window(window)
 
-    async def _emit_window(self, pcm_bytes: bytes, num_channels: int) -> None:
+    async def _emit_window(self, pcm_bytes: bytes) -> None:
         state = MouthState.OPEN if rms_amplitude(pcm_bytes) > self._open_threshold else MouthState.CLOSED
         blinking = self._blink.advance(1.0 / self._video_fps) if self._blink is not None else False
 
         video_frame = self._assets.video_frame(state, blinking=blinking)
         audio_frame = make_audio_frame(
-            pcm_bytes, sample_rate=self._audio_sample_rate, num_channels=num_channels
+            pcm_bytes, sample_rate=self._audio_sample_rate, num_channels=self._audio_channels
         )
         await self._out_queue.put(video_frame)
         await self._out_queue.put(audio_frame)
@@ -157,6 +158,7 @@ class ImageAvatarVideoGenerator(VideoGenerator):
     def clear_buffer(self) -> None:
         """Drop everything buffered — called on barge-in/interruption."""
         self._pcm_buffer.clear()
+        self._normalizer.reset()
         while True:
             try:
                 self._out_queue.get_nowait()

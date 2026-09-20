@@ -34,6 +34,7 @@ from typing import Literal
 from livekit import rtc
 from livekit.agents.voice.avatar import AudioSegmentEnd, VideoGenerator
 
+from ._audio_normalize import AudioNormalizer
 from ._pcm_windowing import bytes_per_window, make_audio_frame, pad_to_window, rms_amplitude
 from .assets import AvatarAssets, MouthState, Viseme
 from .blink import BlinkDriver
@@ -76,6 +77,10 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
             assets: must have BOTH `Viseme` and `MouthState` frames loaded
                 (e.g. ``AvatarAssets.load(dir, states=(*MouthState, *Viseme))``)
                 — `MouthState` is needed for the amplitude fallback path.
+            audio_sample_rate / audio_channels: the format the avatar's
+                audio track is published at (and the WAV handed to
+                rhubarb). Pushed frames at any other rate/channel count are
+                normalized to this — see `ImageAvatarVideoGenerator`.
             rhubarb_path: explicit path to the rhubarb executable. Falls
                 back to the RHUBARB_PATH env var, then PATH, if unset.
             recognizer: used only when no per-utterance dialog text is set
@@ -122,9 +127,9 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
         self._blink = BlinkDriver() if enable_blink else None
 
         self._bytes_per_window = bytes_per_window(audio_sample_rate, video_fps, audio_channels)
+        self._normalizer = AudioNormalizer(sample_rate=audio_sample_rate, channels=audio_channels)
 
         self._pcm_buffer = bytearray()
-        self._channels_seen = audio_channels
         self._pending_text: str | None = None
 
         self._pending_jobs: asyncio.Queue[_UtteranceJob] = asyncio.Queue()
@@ -171,9 +176,10 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
 
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         if isinstance(frame, AudioSegmentEnd):
+            self._pcm_buffer.extend(self._normalizer.flush())
             job = _UtteranceJob(
                 pcm_bytes=bytes(self._pcm_buffer),
-                num_channels=self._channels_seen,
+                num_channels=self._audio_channels,
                 dialog_text=self._pending_text,
             )
             self._pcm_buffer.clear()
@@ -182,23 +188,13 @@ class RhubarbVisemeVideoGenerator(VideoGenerator):
             return
 
         self._idle_event.clear()  # speech is flowing — pause idle heartbeat
-
-        if frame.sample_rate != self._audio_sample_rate:
-            logger.warning(
-                "pushed audio sample_rate=%d does not match configured "
-                "audio_sample_rate=%d — set audio_sample_rate to match your "
-                "TTS output, no resampling is done",
-                frame.sample_rate,
-                self._audio_sample_rate,
-            )
-
-        self._channels_seen = frame.num_channels
-        self._pcm_buffer.extend(bytes(frame.data))
+        self._pcm_buffer.extend(self._normalizer.push(frame))
 
     def clear_buffer(self) -> None:
         """Drop everything buffered/queued and kill any in-flight rhubarb
         subprocess — called on barge-in/interruption."""
         self._pcm_buffer.clear()
+        self._normalizer.reset()
         self._pending_text = None
         while True:
             try:
