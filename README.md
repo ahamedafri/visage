@@ -13,6 +13,16 @@ generated from a photo (see [Using AI-generated / photoreal art](#using-ai-gener
 
 ## Status
 
+**Alpha, but verified live.** The amplitude-mode pipeline has been run
+end-to-end against a real LiveKit Cloud room: a second participant
+subscribed and received the avatar's 512×512 video + audio tracks
+(`scripts/live_test.py`, see [Testing against a real room](#testing-against-a-real-room)).
+What has *not* been exercised live yet: driving it from a full
+`AgentSession` with real TTS (the wiring in `examples/` mirrors
+`livekit-plugins-bithuman`'s local mode, but nobody has pressed play on it
+with a real LLM/TTS behind it), and Rhubarb mode with the real `rhubarb`
+binary.
+
 `pip install`-able (see [Quickstart](#quickstart)). **v1 (amplitude-only
 lip-sync) — working**, **Phase 2a (real viseme timing via Rhubarb Lip
 Sync) — working, opt-in**, and **Phase 2b (blinking + idle heartbeat) —
@@ -22,7 +32,7 @@ shapes, added latency) is a drop-in alternative — see
 [Real viseme timing](#real-viseme-timing-rhubarb-lip-sync) below. Both
 generators blink periodically — including between agent turns, not just
 while speaking — if blink art is present (see [Blinking](#blinking)).
-Built and verified against `livekit-agents==1.8.1`.
+Built against `livekit-agents==1.8.1`.
 
 ## Quickstart
 
@@ -45,6 +55,30 @@ pytest
 Then wire it into your agent — see [`examples/local_agent_example.py`](examples/local_agent_example.py)
 for the minimal `AgentSession` integration (co-located "local mode": the
 avatar runs in the same process as your agent, no separate worker needed).
+
+## Testing against a real room
+
+`scripts/live_test.py` joins a fresh room on **your** LiveKit server with two
+participants: the avatar (using the exact `QueueAudioOutput` → `AvatarRunner`
+wiring an agent would use) and a viewer that subscribes the way a browser
+client would and counts the frames it actually receives — so pass/fail is
+based on what came back through the real server, not on what was sent. No
+LLM or TTS needed; it pushes synthetic speech-like audio by default, or a
+WAV you provide with `--wav`.
+
+```bash
+python scripts/live_test.py --env-file path/to/.env    # needs LIVEKIT_URL / _API_KEY / _API_SECRET
+```
+
+It prints the room name and writes a viewer token to `_live_test_token.txt`
+(gitignored) so you can watch the same room yourself at
+[meet.livekit.io](https://meet.livekit.io) (Custom tab, paste your server
+URL + that token) while it runs — add `--hold 30` to keep the room open
+longer. A representative run against LiveKit Cloud: 151 of an expected ~162
+video frames received at 512×512, audio arriving at 48kHz, first video frame
+~1.8s after audio was queued (that startup cost is LiveKit publishing the
+audio track, waiting for a subscriber, then publishing video — a one-time
+per-session cost, not per-utterance).
 
 ## Real viseme timing (Rhubarb Lip Sync)
 
@@ -254,6 +288,7 @@ or use `ImageAvatarVideoGenerator` instead if you only need viseme coverage.
 - [x] Hardening — audio resampling/channel normalization, `background=`
       color option, dedicated G/H viseme art, GitHub Actions CI
       (Linux + Windows matrix, plus a build-and-install-the-wheel check)
+- [x] Verified live against a real LiveKit Cloud room (`scripts/live_test.py`)
 - [ ] Phase 4 — demo video, community distribution
 - [ ] fast-follow — verify a safe `AgentSession` hook to auto-wire known TTS
       transcript text into rhubarb's `-d` flag; idle head-sway

@@ -35,6 +35,13 @@
 - **GitHub Actions CI**: pytest on a Linux + Windows × Python 3.10/3.13
   matrix, plus a job that builds the wheel and installs it into a fresh venv
   to prove the packaged default art is present and loadable.
+- **`scripts/live_test.py`**: end-to-end verification against a real LiveKit
+  server — no LLM/TTS needed. Joins a fresh room with two participants (the
+  avatar, using the exact `AvatarRunner` wiring an agent would; a viewer that
+  subscribes and counts frames like a browser would) so pass/fail is based
+  on what actually came back through the server. Run against LiveKit Cloud:
+  151/162 expected video frames received at 512×512, real audio, ~1.8s
+  first-frame latency.
 - 37 tests total.
 
 ## 0.1.0

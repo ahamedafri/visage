@@ -11,3 +11,4 @@ dist/
 !examples/**/*.wav
 .pytest_cache/
 /_smoke_test_output/
+/_live_test_token.txt
