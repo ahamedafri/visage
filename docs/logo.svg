@@ -1,0 +1,10 @@
+<svg width="240" height="240" viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="visage logo: a face with a soundwave mouth">
+  <circle cx="120" cy="120" r="95" fill="#F7CA18" stroke="#282828" stroke-width="8"/>
+  <circle cx="95" cy="92" r="9" fill="#282828"/>
+  <circle cx="145" cy="92" r="9" fill="#282828"/>
+  <rect x="70" y="155" width="14" height="10" rx="7" fill="#782828"/>
+  <rect x="90" y="145" width="14" height="20" rx="7" fill="#782828"/>
+  <rect x="110" y="133" width="14" height="32" rx="7" fill="#782828"/>
+  <rect x="130" y="145" width="14" height="20" rx="7" fill="#782828"/>
+  <rect x="150" y="155" width="14" height="10" rx="7" fill="#782828"/>
+</svg>
